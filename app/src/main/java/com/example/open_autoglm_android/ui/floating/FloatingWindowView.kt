@@ -24,8 +24,7 @@ class FloatingWindowView(
     private var isShowing = false
     
     // UI组件
-    private var statusIcon: ImageView? = null
-    private var statusText: TextView? = null
+    private var statusIndicator: View? = null
     private var stopButton: ImageView? = null
     
     // 回调接口
@@ -66,9 +65,9 @@ class FloatingWindowView(
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT
             ).apply {
-                gravity = Gravity.TOP or Gravity.START
-                x = 100
-                y = 200
+                gravity = Gravity.BOTTOM or Gravity.START
+                x = 0
+                y = 0
             }
             
             // 添加到窗口管理器
@@ -104,19 +103,16 @@ class FloatingWindowView(
     fun updateStatus(status: TaskStatus, message: String = "") {
         when (status) {
             TaskStatus.THINKING -> {
-                statusIcon?.setImageResource(R.drawable.ic_thinking)
-                statusText?.text = "思考中..."
-                statusText?.setTextColor(ContextCompat.getColor(context, android.R.color.holo_blue_dark))
+                // 思考中状态：蓝色
+                statusIndicator?.backgroundTintList = ContextCompat.getColorStateList(context, android.R.color.holo_blue_dark)
             }
             TaskStatus.SUCCESS -> {
-                statusIcon?.setImageResource(R.drawable.ic_success)
-                statusText?.text = if (message.isEmpty()) "任务完成" else message
-                statusText?.setTextColor(ContextCompat.getColor(context, android.R.color.holo_green_dark))
+                // 成功状态：绿色
+                statusIndicator?.backgroundTintList = ContextCompat.getColorStateList(context, android.R.color.holo_green_dark)
             }
             TaskStatus.FAILED -> {
-                statusIcon?.setImageResource(R.drawable.ic_error)
-                statusText?.text = if (message.isEmpty()) "任务失败" else message
-                statusText?.setTextColor(ContextCompat.getColor(context, android.R.color.holo_red_dark))
+                // 失败状态：红色
+                statusIndicator?.backgroundTintList = ContextCompat.getColorStateList(context, android.R.color.holo_red_dark)
             }
         }
     }
@@ -131,8 +127,7 @@ class FloatingWindowView(
      */
     private fun initViews() {
         floatingView?.let { view ->
-            statusIcon = view.findViewById(R.id.status_icon)
-            statusText = view.findViewById(R.id.status_text)
+            statusIndicator = view.findViewById(R.id.status_indicator)
             stopButton = view.findViewById(R.id.stop_button)
         }
     }
