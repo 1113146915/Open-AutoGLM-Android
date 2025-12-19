@@ -5,11 +5,101 @@ import android.util.Base64
 import android.util.Log
 import com.example.open_autoglm_android.network.dto.*
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
+import okhttp3.Interceptor
+import okhttp3.Response
+import okio.Buffer
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
+import org.json.JSONObject
+import org.json.JSONArray
+
+/**
+ * 自定义日志拦截器：过滤掉图片的Base64数据，保留其他有用信息
+ */
+class CustomLoggingInterceptor : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        val response = chain.proceed(request)
+        
+        // 记录请求信息（不包含请求头）
+        val requestBody = request.body
+        if (requestBody != null) {
+            val buffer = Buffer()
+            requestBody.writeTo(buffer)
+            val contentType = requestBody.contentType()
+            val charset = contentType?.charset() ?: Charsets.UTF_8
+            
+            val requestString = buffer.readString(charset)
+            val filteredRequest = filterBase64FromJson(requestString)
+            
+            Log.d("API_REQUEST", "请求体: $filteredRequest")
+        }
+        
+        // 记录响应信息（完整保留）
+        val responseBody = response.body
+        if (responseBody != null) {
+            val source = responseBody.source()
+            source.request(Long.MAX_VALUE) // Buffer the entire body
+            val buffer = source.buffer
+            
+            val contentType = responseBody.contentType()
+            val charset = contentType?.charset() ?: Charsets.UTF_8
+            
+            val responseString = buffer.clone().readString(charset)
+            Log.d("API_RESPONSE", "响应体: $responseString")
+        }
+        
+        return response
+    }
+    
+    /**
+     * 过滤JSON中的Base64图片数据
+     */
+    private fun filterBase64FromJson(jsonString: String): String {
+        return try {
+            val jsonObject = JSONObject(jsonString)
+            
+            // 处理messages数组中的图片数据
+            if (jsonObject.has("messages")) {
+                val messages = jsonObject.getJSONArray("messages")
+                for (i in 0 until messages.length()) {
+                    val message = messages.getJSONObject(i)
+                    
+                    // 处理content字段（可能是字符串或数组）
+                    if (message.has("content")) {
+                        val content = message.get("content")
+                        when (content) {
+                            is String -> {
+                                // 简单字符串内容，直接保留
+                            }
+                            is JSONArray -> {
+                                // 数组形式的内容，可能包含图片
+                                for (j in 0 until content.length()) {
+                                    val contentItem = content.getJSONObject(j)
+                                    if (contentItem.has("type") && contentItem.getString("type") == "image_url") {
+                                        // 替换图片的Base64数据为提示信息
+                                        val imageUrl = contentItem.getJSONObject("image_url")
+                                        if (imageUrl.has("url") && imageUrl.getString("url").startsWith("data:image/")) {
+                                            val mimeType = imageUrl.getString("url").substringAfter("data:").substringBefore(";base64")
+                                            imageUrl.put("url", "[$mimeType 图片数据已过滤]")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            jsonObject.toString(2) // 格式化输出，提高可读性
+        } catch (e: Exception) {
+            // 如果JSON解析失败，返回原始字符串的前500字符
+            jsonString.take(500) + if (jsonString.length > 500) "..." else ""
+        }
+    }
+}
 
 data class ModelResponse(
     val thinking: String,
@@ -23,12 +113,10 @@ class ModelClient(
     private val api: AutoGLMApi
     
     init {
-        val loggingInterceptor = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        }
+        val customLoggingInterceptor = CustomLoggingInterceptor()
         
         val client = OkHttpClient.Builder()
-            .addInterceptor(loggingInterceptor)
+            .addInterceptor(customLoggingInterceptor)
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
             .writeTimeout(120, TimeUnit.SECONDS)
@@ -186,15 +274,9 @@ class ModelClient(
 <think>{think}</think>
 <answer>{action}</answer>
 
-【重要】输出格式示例:
-<think>用户要求打开小红书搜索美食攻略,当前屏幕显示为系统桌面,我需要先启动小红书应用。</think>
-<answer>do(action="Launch", app="小红书")</answer>
-
 其中:
 - {think} 是对你为什么选择这个操作的简短推理说明。
 - {action} 是本次执行的具体操作指令,必须严格遵循下方定义的指令格式。
-- 你必须始终包含 <think> 和 <answer> 标签,不要省略!
-- 在 <answer> 标签中必须且只能包含一个操作指令(do或finish函数调用)
 
 操作指令及其作用如下：
 - do(action="Launch", app="xxx")  
@@ -249,10 +331,6 @@ class ModelClient(
 16. 在做游戏任务时如果在战斗页面如果有自动战斗一定要开启自动战斗，如果多轮历史状态相似要检查自动战斗是否开启。
 17. 如果没有合适的搜索结果，可能是因为搜索页面不对，请返回到搜索页面的上一级尝试重新搜索，如果尝试三次返回上一级搜索后仍然没有符合要求的结果，执行 finish(message="原因")。
 18. 在结束任务前请一定要仔细检查任务是否完整准确的完成，如果出现错选、漏选、多选的情况，请返回之前的步骤进行纠正。
-
-【再次强调】你的每一次回复都必须严格按照以下格式:
-<think>你的思考过程</think>
-<answer>do(...)或finish(...)</answer>
 """.trimIndent()
     }
     
@@ -282,10 +360,8 @@ class ModelClient(
         else if (content.contains("<answer>")) {
             val parts = content.split("<answer>", limit = 2)
             thinking = parts[0]
-                .replace("<think>", "")
                 .replace("</think>", "")
-                .replace("<redacted_reasoning>", "")
-                .replace("</redacted_reasoning>", "")
+                .replace("</think>", "")
                 .trim()
             action = parts[1].replace("</answer>", "").trim()
             Log.d("ModelClient", "按 <answer> 标签解析 action: $action")
@@ -296,61 +372,12 @@ class ModelClient(
             Log.w("ModelClient", "未命中任何标记，使用全文作为 action")
         }
         
-        // 补充：如果 action 仍非 do/finish 且不是 JSON，尝试从正文中再提取一次
-        if (!action.startsWith("{") && !action.startsWith("do(") && !action.startsWith("finish(")) {
-            val funcMatch = Regex("""(do|finish)\s*\([^)]+\)""", RegexOption.IGNORE_CASE).find(content)
-            if (funcMatch != null) {
-                action = funcMatch.value
-                Log.d("ModelClient", "回退从正文提取函数调用: $action")
-            } else {
-                val extractedJson = extractJsonFromContent(content)
-                if (extractedJson.isNotEmpty()) {
-                    action = extractedJson
-                    Log.d("ModelClient", "回退从正文提取 JSON: $action")
-                }
-            }
-        }
+        
         
         return ModelResponse(thinking = thinking, action = action)
     }
     
-    /**
-     * 从内容中提取 JSON 对象
-     */
-    private fun extractJsonFromContent(content: String): String {
-        // 尝试找到 JSON 对象（匹配嵌套的大括号）
-        var startIndex = -1
-        var braceCount = 0
-        val candidates = mutableListOf<String>()
-        
-        for (i in content.indices) {
-            when (content[i]) {
-                '{' -> {
-                    if (startIndex == -1) {
-                        startIndex = i
-                    }
-                    braceCount++
-                }
-                '}' -> {
-                    braceCount--
-                    if (braceCount == 0 && startIndex != -1) {
-                        val candidate = content.substring(startIndex, i + 1)
-                        try {
-                            // 验证是否是有效的 JSON
-                            com.google.gson.JsonParser.parseString(candidate)
-                            candidates.add(candidate)
-                        } catch (e: Exception) {
-                            // 不是有效 JSON，继续查找
-                        }
-                        startIndex = -1
-                    }
-                }
-            }
-        }
-        
-        // 返回第一个有效的 JSON 对象
-        return candidates.firstOrNull() ?: ""
-    }
+    
     
     private fun String.ensureTrailingSlash(): String {
         return if (this.endsWith("/")) this else "$this/"

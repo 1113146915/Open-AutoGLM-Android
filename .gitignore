@@ -24,3 +24,5 @@ app/release/
 
 # Kotlin build cache
 .kotlin/
+
+log/
