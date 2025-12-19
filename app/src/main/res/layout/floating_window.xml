@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:background="@drawable/floating_background"
+    android:padding="12dp"
+    android:gravity="center_vertical"
+    android:elevation="8dp">
+
+    <!-- 状态图标 -->
+    <ImageView
+        android:id="@+id/status_icon"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:src="@drawable/ic_thinking"
+        android:layout_marginEnd="8dp" />
+
+    <!-- 状态文本 -->
+    <TextView
+        android:id="@+id/status_text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="思考中..."
+        android:textSize="14sp"
+        android:textColor="@android:color/holo_blue_dark"
+        android:textStyle="bold"
+        android:maxWidth="120dp"
+        android:ellipsize="end"
+        android:maxLines="2"
+        android:layout_marginEnd="8dp" />
+
+    <!-- 停止按钮 -->
+    <ImageView
+        android:id="@+id/stop_button"
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:src="@drawable/ic_stop"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:padding="2dp"
+        android:contentDescription="停止任务" />
+
+</LinearLayout>

@@ -190,9 +190,11 @@ class ModelClient(
 <think>用户要求打开小红书搜索美食攻略,当前屏幕显示为系统桌面,我需要先启动小红书应用。</think>
 <answer>do(action="Launch", app="小红书")</answer>
 
-其中：
+其中:
 - {think} 是对你为什么选择这个操作的简短推理说明。
-- {action} 是本次执行的具体操作指令，必须严格遵循下方定义的指令格式，不能输出其他格式（如[{'Type", text="西装")，这是严重的错误，会导致任务失败）。
+- {action} 是本次执行的具体操作指令,必须严格遵循下方定义的指令格式。
+- 你必须始终包含 <think> 和 <answer> 标签,不要省略!
+- 在 <answer> 标签中必须且只能包含一个操作指令(do或finish函数调用)
 
 操作指令及其作用如下：
 - do(action="Launch", app="xxx")  

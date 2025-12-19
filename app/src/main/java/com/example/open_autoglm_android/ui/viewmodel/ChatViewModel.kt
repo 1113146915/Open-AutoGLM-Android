@@ -10,6 +10,7 @@ import com.example.open_autoglm_android.domain.ActionExecutor
 import com.example.open_autoglm_android.network.ModelClient
 import com.example.open_autoglm_android.network.dto.ChatMessage as NetworkChatMessage
 import com.example.open_autoglm_android.service.AutoGLMAccessibilityService
+import com.example.open_autoglm_android.ui.floating.TaskStatusManager
 import com.example.open_autoglm_android.util.BitmapUtils
 import com.example.open_autoglm_android.util.DeviceUtils
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -103,6 +104,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             error = null
         )
         
+        // 生成任务ID并开始悬浮窗
+        val taskId = "task_${System.currentTimeMillis()}"
+        TaskStatusManager.startTask(taskId, getApplication())
+        
         viewModelScope.launch {
             try {
                 // 重新初始化 ModelClient（以防配置变化）
@@ -115,6 +120,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         isLoading = false,
                         error = "请先在设置页面配置 API Key"
                     )
+                    TaskStatusManager.failTask("请先配置 API Key")
                     return@launch
                 }
                 
@@ -163,6 +169,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     isLoading = false,
                     error = errorMessage
                 )
+                TaskStatusManager.failTask(errorMessage)
                 return
             }
             
@@ -175,10 +182,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     // 不返回，继续执行
                 } else {
                     // 在真机上，如果截图是全黑的，给出错误提示
+                    val blackScreenError = "截图是全黑的，可能是应用设置了 FLAG_SECURE 防止截图，或者是应用正在启动中。请稍后再试。\n\n提示：如果在模拟器上运行，截图功能可能无法正常工作，建议在真机上测试。"
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        error = "截图是全黑的，可能是应用设置了 FLAG_SECURE 防止截图，或者是应用正在启动中。请稍后再试。\n\n提示：如果在模拟器上运行，截图功能可能无法正常工作，建议在真机上测试。"
+                        error = blackScreenError
                     )
+                    TaskStatusManager.failTask(blackScreenError)
                     return
                 }
             }
@@ -247,6 +256,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     isLoading = false,
                     taskCompletedMessage = completionMessage
                 )
+                TaskStatusManager.completeTask(completionMessage)
                 Log.d("ChatViewModel", "任务完成(无需执行动作): $completionMessage")
                 return
             }
@@ -271,6 +281,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     isLoading = false,
                     taskCompletedMessage = completionMessage
                 )
+                TaskStatusManager.completeTask(completionMessage)
                 Log.d("ChatViewModel", "任务完成: $completionMessage")
                 return
             }
@@ -307,10 +318,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 if (retryCount >= 10) {
+                    val retryError = result.message ?: "执行动作失败"
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        error = result.message ?: "执行动作失败"
+                        error = retryError
                     )
+                    TaskStatusManager.failTask(retryError)
                     Log.e("ChatViewModel", "重试超过上限，结束流程: ${result.message}")
                     return
                 }
@@ -328,10 +341,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             stepCount++
         }
         
+        val maxStepsError = "达到最大步数限制"
         _uiState.value = _uiState.value.copy(
             isLoading = false,
-            error = "达到最大步数限制"
+            error = maxStepsError
         )
+        TaskStatusManager.failTask(maxStepsError)
         Log.w("ChatViewModel", "达到最大步数限制")
     }
     
