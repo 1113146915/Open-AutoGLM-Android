@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.open_autoglm_android.ui.viewmodel.ChatViewModel
 import com.example.open_autoglm_android.ui.viewmodel.MessageRole
+import com.example.open_autoglm_android.ui.floating.TaskStatusManager
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -28,6 +29,10 @@ fun ChatScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
+    
+    // 监听任务状态
+    val taskState by TaskStatusManager.taskState.collectAsStateWithLifecycle()
+    val isTaskRunning = taskState !is TaskStatusManager.TaskState.Idle
     val context = LocalContext.current
     
     var userInput by remember { mutableStateOf("") }
@@ -182,12 +187,31 @@ fun ChatScreen(
                 )
                 Button(
                     onClick = {
-                        viewModel.sendMessage(userInput)
-                        userInput = ""
+                        if (isTaskRunning) {
+                            // 停止任务
+                            viewModel.stopCurrentTask()
+                        } else {
+                            // 发送消息
+                            viewModel.sendMessage(userInput)
+                            userInput = ""
+                        }
                     },
-                    enabled = !uiState.isLoading && userInput.isNotBlank()
+                    enabled = if (isTaskRunning) {
+                        // 停止按钮：任务运行时始终可用
+                        true
+                    } else {
+                        // 发送按钮：没有加载且有输入内容时可用
+                        !uiState.isLoading && userInput.isNotBlank()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isTaskRunning) {
+                            MaterialTheme.colorScheme.error  // 停止按钮用红色
+                        } else {
+                            MaterialTheme.colorScheme.primary  // 发送按钮用主色
+                        }
+                    )
                 ) {
-                    Text("发送")
+                    Text(if (isTaskRunning) "停止" else "发送")
                 }
             }
         }

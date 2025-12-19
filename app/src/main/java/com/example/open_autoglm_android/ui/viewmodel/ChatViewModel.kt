@@ -1,6 +1,11 @@
 package com.example.open_autoglm_android.ui.viewmodel
 
 import android.app.Application
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -11,6 +16,7 @@ import com.example.open_autoglm_android.network.ModelClient
 import com.example.open_autoglm_android.network.dto.ChatMessage as NetworkChatMessage
 import com.example.open_autoglm_android.service.AutoGLMAccessibilityService
 import com.example.open_autoglm_android.ui.floating.TaskStatusManager
+import kotlinx.coroutines.delay
 import com.example.open_autoglm_android.util.BitmapUtils
 import com.example.open_autoglm_android.util.DeviceUtils
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,6 +53,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
     
+    // 广播接收器，用于接收停止任务的指令
+    private val stopTaskReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == "com.example.open_autoglm_android.STOP_TASK") {
+                stopCurrentTask()
+            }
+        }
+    }
+    
     private var modelClient: ModelClient? = null
     private var actionExecutor: ActionExecutor? = null
     
@@ -54,6 +69,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val messageContext = mutableListOf<NetworkChatMessage>()
     
     init {
+        // 注册广播接收器
+        val filter = IntentFilter("com.example.open_autoglm_android.STOP_TASK")
+        getApplication<Application>().registerReceiver(
+            stopTaskReceiver, 
+            filter,
+            Context.RECEIVER_NOT_EXPORTED
+        )
+        
         viewModelScope.launch {
             // 初始化 ModelClient
             val baseUrl = preferencesRepository.getBaseUrlSync()
@@ -72,6 +95,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+    
+    override fun onCleared() {
+        super.onCleared()
+        // 注销广播接收器
+        getApplication<Application>().unregisterReceiver(stopTaskReceiver)
     }
     
     fun sendMessage(userInput: String) {
@@ -153,6 +182,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         var retryCount = 0
         
         while (stepCount < maxSteps) {
+            // 检查任务是否已被停止
+            if (!TaskStatusManager.hasActiveTask()) {
+                Log.d("ChatViewModel", "任务已被用户停止，退出循环")
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = null
+                )
+                return
+            }
+            
             Log.d("ChatViewModel", "执行步骤 $stepCount")
             
             // 截图
@@ -208,6 +247,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 messageContext.add(client.createScreenInfoMessage(screenshot, currentApp))
             }
             
+            // 再次检查任务是否已被停止
+            if (!TaskStatusManager.hasActiveTask()) {
+                Log.d("ChatViewModel", "任务已被用户停止，退出循环（AI调用前）")
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = null
+                )
+                return
+            }
+            
             // 调用模型（使用消息上下文）
             val messagesList: List<NetworkChatMessage> = messageContext.toList()
             val response = client.request(
@@ -215,6 +264,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 modelName = modelName,
                 apiKey = apiKey
             )
+            
+            // AI调用后再次检查任务状态
+            if (!TaskStatusManager.hasActiveTask()) {
+                Log.d("ChatViewModel", "任务已被用户停止，退出循环（AI调用后）")
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = null
+                )
+                return
+            }
             Log.d("ChatViewModel", "模型响应: thinking=${response.thinking.take(100)}, action=${response.action.take(100)}")
             
             // 添加助手消息到上下文
@@ -258,6 +317,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 TaskStatusManager.completeTask(completionMessage)
                 Log.d("ChatViewModel", "任务完成(无需执行动作): $completionMessage")
+                return
+            }
+            
+            // 动作执行前检查任务状态
+            if (!TaskStatusManager.hasActiveTask()) {
+                Log.d("ChatViewModel", "任务已被用户停止，退出循环（动作执行前）")
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = null
+                )
                 return
             }
             
@@ -401,5 +470,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val apiKey = preferencesRepository.getApiKeySync() ?: "EMPTY"
             modelClient = ModelClient(baseUrl, apiKey)
         }
+    }
+    
+    /**
+     * 停止当前任务
+     * 支持从对话界面和悬浮窗调用
+     */
+    fun stopCurrentTask() {
+        Log.d("ChatViewModel", "用户请求停止任务")
+        
+        // 通知TaskStatusManager停止任务（这会导致executeTaskLoop中的检查失败并退出）
+        TaskStatusManager.stopTask()
+        
+        // 更新UI状态
+        _uiState.value = _uiState.value.copy(
+            isLoading = false,
+            error = "任务已停止"
+        )
+        
+        // 清空消息上下文，停止后续执行
+        messageContext.clear()
+        Log.d("ChatViewModel", "用户主动停止了任务，已清理状态")
     }
 }

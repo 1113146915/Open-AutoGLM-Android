@@ -5,8 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.Context
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -129,11 +131,14 @@ class TaskFloatingService : Service() {
      * 停止当前任务
      */
     private fun stopCurrentTask() {
-        // 通知ChatViewModel停止任务
+        // 发送广播通知ChatViewModel停止任务
+        val stopIntent = Intent("com.example.open_autoglm_android.STOP_TASK")
+        sendBroadcast(stopIntent)
+        
+        // 通知TaskStatusManager停止任务
         TaskStatusManager.stopTask()
         
-        // 可以在这里添加额外的停止逻辑，比如通知无障碍服务
-        // 或者发送广播通知其他组件
+        Log.d("TaskFloatingService", "发送停止任务广播")
     }
     
     /**
