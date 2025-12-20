@@ -18,6 +18,7 @@ import com.example.open_autoglm_android.ui.viewmodel.SettingsViewModel
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel,
+    onWorkflowClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -92,6 +93,32 @@ fun SettingsScreen(
                             Text("前往设置")
                         }
                     }
+                }
+            }
+        }
+        
+        // 工作流管理入口
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = onWorkflowClick
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "工作流管理",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = "配置和管理AI工作流",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }

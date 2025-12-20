@@ -803,7 +803,8 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
             "twitter" to "com.twitter.android",
             "X" to "com.twitter.android",
             "Whatsapp" to "com.whatsapp",
-            "WhatsApp" to "com.whatsapp"
+            "虚拟定位" to "com.lerist.fakelocation",
+            "虚拟机" to "com.vphonegaga.titan"
         )
         return appPackageMap[appName] ?: appName
     }

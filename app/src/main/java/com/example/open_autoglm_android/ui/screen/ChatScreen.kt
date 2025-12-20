@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,9 +16,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.open_autoglm_android.data.model.Workflow
+import com.example.open_autoglm_android.data.repository.WorkflowRepository
+import com.example.open_autoglm_android.ui.components.WorkflowSelector
 import com.example.open_autoglm_android.ui.viewmodel.ChatViewModel
 import com.example.open_autoglm_android.ui.viewmodel.MessageRole
+import com.example.open_autoglm_android.ui.viewmodel.WorkflowSelectorViewModel
 import com.example.open_autoglm_android.ui.floating.TaskStatusManager
+import com.google.gson.Gson
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -29,11 +36,26 @@ fun ChatScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+    
+    // 工作流选择器ViewModel
+    val workflowSelectorViewModel: WorkflowSelectorViewModel = viewModel(
+        factory = object : androidx.lifecycle.ViewModelProvider.Factory {
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                @Suppress("UNCHECKED_CAST")
+                return WorkflowSelectorViewModel(
+                    workflowRepository = WorkflowRepository.getInstance(
+                        context = context,
+                        gson = Gson()
+                    )
+                ) as T
+            }
+        }
+    )
     
     // 监听任务状态
     val taskState by TaskStatusManager.taskState.collectAsStateWithLifecycle()
     val isTaskRunning = taskState !is TaskStatusManager.TaskState.Idle
-    val context = LocalContext.current
     
     var userInput by remember { mutableStateOf("") }
     
@@ -177,6 +199,22 @@ fun ChatScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.Bottom
             ) {
+                // 工作流选择按钮
+                IconButton(
+                    onClick = { workflowSelectorViewModel.toggleWorkflowSelector() },
+                    enabled = !uiState.isLoading && !isTaskRunning
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.List,
+                        contentDescription = "选择工作流",
+                        tint = if (!uiState.isLoading && !isTaskRunning) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        }
+                    )
+                }
+                
                 OutlinedTextField(
                     value = userInput,
                     onValueChange = { userInput = it },
@@ -215,6 +253,15 @@ fun ChatScreen(
                 }
             }
         }
+        
+        // 工作流选择器
+        WorkflowSelector(
+            viewModel = workflowSelectorViewModel,
+            onWorkflowSelected = { workflow ->
+                // 将工作流步骤设置为输入框内容
+                userInput = workflow.steps
+            }
+        )
     }
 }
 

@@ -11,12 +11,17 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.open_autoglm_android.data.repository.WorkflowRepository
 import com.example.open_autoglm_android.ui.screen.ChatScreen
 import com.example.open_autoglm_android.ui.screen.SettingsScreen
+import com.example.open_autoglm_android.ui.screen.WorkflowManagementScreen
 import com.example.open_autoglm_android.ui.theme.OpenAutoGLMAndroidTheme
 import com.example.open_autoglm_android.ui.viewmodel.ChatViewModel
 import com.example.open_autoglm_android.ui.viewmodel.SettingsViewModel
+import com.example.open_autoglm_android.ui.viewmodel.WorkflowViewModel
+import com.google.gson.Gson
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -30,11 +35,44 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * 工作流页面包装器
+ * 创建必要的ViewModel并显示工作流管理页面
+ */
+@Composable
+fun WorkflowScreenWrapper(
+    onBackClick: () -> Unit
+) {
+    val context = LocalContext.current
+    val application = context.applicationContext as android.app.Application
+    
+    val workflowViewModel: WorkflowViewModel = viewModel(
+        factory = object : androidx.lifecycle.ViewModelProvider.Factory {
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                @Suppress("UNCHECKED_CAST")
+                return WorkflowViewModel(
+                    application = application,
+                    workflowRepository = WorkflowRepository.getInstance(
+                        context = context,
+                        gson = Gson()
+                    )
+                ) as T
+            }
+        }
+    )
+    
+    WorkflowManagementScreen(
+        viewModel = workflowViewModel,
+        onBackClick = onBackClick
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen() {
     var selectedTab by remember { mutableStateOf(0) }
     var previousTab by remember { mutableStateOf(0) }
+    var showWorkflowScreen by remember { mutableStateOf(false) }
     
     val chatViewModel: ChatViewModel = viewModel()
     val settingsViewModel: SettingsViewModel = viewModel()
@@ -77,15 +115,24 @@ fun MainScreen() {
         }
     ) { paddingValues ->
         Box(modifier = Modifier.padding(paddingValues)) {
-            when (selectedTab) {
-                0 -> ChatScreen(
-                    viewModel = chatViewModel,
-                    modifier = Modifier.fillMaxSize()
+            if (showWorkflowScreen) {
+                // 显示工作流管理页面
+                WorkflowScreenWrapper(
+                    onBackClick = { showWorkflowScreen = false }
                 )
-                1 -> SettingsScreen(
-                    viewModel = settingsViewModel,
-                    modifier = Modifier.fillMaxSize()
-                )
+            } else {
+                // 显示主要页面
+                when (selectedTab) {
+                    0 -> ChatScreen(
+                        viewModel = chatViewModel,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    1 -> SettingsScreen(
+                        viewModel = settingsViewModel,
+                        onWorkflowClick = { showWorkflowScreen = true },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
     }
