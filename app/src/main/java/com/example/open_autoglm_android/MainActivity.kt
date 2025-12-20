@@ -16,7 +16,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.open_autoglm_android.data.repository.WorkflowRepository
 import com.example.open_autoglm_android.ui.screen.ChatScreen
 import com.example.open_autoglm_android.ui.screen.SettingsScreen
-import com.example.open_autoglm_android.ui.screen.WorkflowManagementScreen
+import com.example.open_autoglm_android.ui.screen.EnhancedWorkflowManagementScreen
 import com.example.open_autoglm_android.ui.theme.OpenAutoGLMAndroidTheme
 import com.example.open_autoglm_android.ui.viewmodel.ChatViewModel
 import com.example.open_autoglm_android.ui.viewmodel.SettingsViewModel
@@ -61,9 +61,18 @@ fun WorkflowScreenWrapper(
         }
     )
     
-    WorkflowManagementScreen(
+    EnhancedWorkflowManagementScreen(
         viewModel = workflowViewModel,
-        onBackClick = onBackClick
+        onBackClick = onBackClick,
+        onEditWorkflow = { workflowId ->
+            // 启动编辑工作流流程
+            workflowViewModel.startEditWorkflowById(workflowId)
+        },
+        onExecuteWorkflow = { workflowId ->
+            // 执行工作流（这里可以实现具体的执行逻辑）
+            // 暂时用日志打印
+            println("执行工作流: $workflowId")
+        }
     )
 }
 

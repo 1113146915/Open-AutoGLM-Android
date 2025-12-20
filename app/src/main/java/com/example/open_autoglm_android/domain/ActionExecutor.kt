@@ -7,6 +7,7 @@ import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import com.example.open_autoglm_android.service.AutoGLMAccessibilityService
+import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -242,8 +243,8 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
     private fun tryFixMalformedJson(text: String): String {
         Log.d("ActionExecutor", "尝试修复格式错误的 JSON: ${text.take(200)}")
         
-        // 处理方括号格式：[{'Type': 'Type", text="xxx")] -> do(action="Type", text="xxx")
-        if (text.trim().startsWith("[") && (text.contains("'Type'") || text.contains("\"Type\""))) {
+        // 处理方括号格式：[{'type': 'Tap", element=[805,655])] -> do(action="Tap", element=[805,655])
+        if (text.trim().startsWith("[") && (text.contains("'type'") || text.contains("\"type\"") || text.contains("'Type'") || text.contains("\"Type\""))) {
             Log.d("ActionExecutor", "检测到方括号格式，尝试转换")
             val fixed = fixBracketFormat(text)
             if (fixed.isNotEmpty()) {
@@ -394,11 +395,25 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
         try {
             Log.d("ActionExecutor", "开始修复方括号格式: ${text.take(200)}")
             
-            // 移除外层方括号
-            val innerContent = text.trim().removeSurrounding("[", "]")
+            // 移除外层方括号，处理各种格式
+            var innerContent = text.trim()
+            // 处理 [{...}] 或 {...}] 格式
+            if (innerContent.startsWith("[{")) {
+                innerContent = innerContent.substring(2)
+            } else if (innerContent.startsWith("[")) {
+                innerContent = innerContent.substring(1)
+            }
+            // 移除末尾的 ] 或 )
+            if (innerContent.endsWith("}]")) {
+                innerContent = innerContent.dropLast(2)
+            } else if (innerContent.endsWith("]")) {
+                innerContent = innerContent.dropLast(1)
+            } else if (innerContent.endsWith(")")) {
+                innerContent = innerContent.dropLast(1)
+            }
             Log.d("ActionExecutor", "移除方括号后: ${innerContent.take(200)}")
             
-            // 修复引号嵌套问题：'Type\' -> Type, "Type" -> Type
+            // 修复引号嵌套问题：'Type\' -> Type, "Type" -> Type, 'type' -> Type, "type" -> Type
             var fixedContent = innerContent
                 .replace("'Type\\'", "Type")
                 .replace("\"Type\"", "Type")
@@ -407,6 +422,28 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
                 .replace("'Type\\\"", "Type")
                 .replace("'Type\\\"", "Type")
                 .replace("'Type\\\"", "Type")
+                // 修复 type 字段的各种引号组合
+                .replace("'type':", "action:")
+                .replace("\"type\":", "action:")
+                .replace("'type' =", "action =")
+                .replace("\"type\" =", "action =")
+                // 修复引号不匹配问题
+                .replace("'Tap\"", "\"Tap\"")
+                .replace("'Tap\"", "\"Tap\"")
+                .replace("'Type\"", "\"Type\"")
+                .replace("'launch\"", "\"launch\"")
+                .replace("'Launch\"", "\"Launch\"")
+                .replace("'type'", "\"action\"")
+                .replace("\"type\"", "\"action\"")
+                // 修复混合引号问题：'value" -> "value", "value' -> "value"
+                .replace("'Tap\"", "\"Tap\"")
+                .replace("'type\"", "\"action\"")
+                .replace("'Type\"", "\"Type\"")
+                .replace("'launch\"", "\"launch\"")
+                .replace("'swipe\"", "\"swipe\"")
+                .replace("'Swipe\"", "\"Swipe\"")
+                .replace("'Wait\"", "\"Wait\"")
+                .replace("'wait\"", "\"wait\"")
             
             Log.d("ActionExecutor", "修复引号后: ${fixedContent.take(200)}")
             
@@ -414,7 +451,7 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
             val params = mutableMapOf<String, String>()
             
             // 提取 action 参数
-            val actionPattern = Regex("""(?:Type|action)\s*[:=]\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            val actionPattern = Regex("""(?:type|action)\s*[:=]\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
             val actionMatch = actionPattern.find(fixedContent)
             if (actionMatch != null) {
                 params["action"] = actionMatch.groupValues[1]
@@ -445,39 +482,40 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
                 Log.d("ActionExecutor", "提取到 message: ${params["message"]}")
             }
             
-            // 根据 action 类型构建标准格式
-            return when (params["action"]?.lowercase()) {
-                "type" -> {
-                    val text = params["text"] ?: ""
-                    """do(action="Type", text="$text")"""
-                }
-                "tap" -> {
-                    val element = params["element"] ?: ""
-                    val message = params["message"]
-                    return if (message != null) {
-                        """do(action="Tap", element=$element, message="$message")"""
-                    } else {
-                        """do(action="Tap", element=$element)"""
-                    }
-                }
-                "launch" -> {
-                    val app = params["app"] ?: params["message"] ?: ""
-                    """do(action="Launch", app="$app")"""
-                }
-                "finish" -> {
-                    val message = params["message"] ?: ""
-                    """finish(message="$message")"""
-                }
-                else -> {
-                    // 如果没有识别到 action，但有 text，默认为 Type 操作
-                    val text = params["text"] ?: ""
-                    if (text.isNotEmpty()) {
-                        """do(action="Type", text="$text")"""
-                    } else {
-                        Log.w("ActionExecutor", "无法从方括号格式中提取有效参数")
-                        ""
-                    }
-                }
+            // 提取 duration 参数
+            val durationPattern = Regex("""duration\s*[:=]\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+            val durationMatch = durationPattern.find(fixedContent)
+            if (durationMatch != null) {
+                params["duration"] = durationMatch.groupValues[1]
+                Log.d("ActionExecutor", "提取到 duration: ${params["duration"]}")
+            }
+            
+            // 根据 action 类型构建 JSON 格式
+            val jsonMap = mutableMapOf<String, Any>("_metadata" to "do")
+            
+            // 添加 action 参数
+            params["action"]?.let { jsonMap["action"] = it }
+            
+            // 添加其他参数
+            params["text"]?.let { jsonMap["text"] = it }
+            params["element"]?.let { 
+                // 解析元素数组，如 [805,655] -> [805,655]
+                val elementStr = it.trim().removeSurrounding("[", "]")
+                val coordinates = elementStr.split(",").map { it.trim().toIntOrNull() ?: 0 }
+                jsonMap["element"] = coordinates
+            }
+            params["duration"]?.let { jsonMap["duration"] = it }
+            params["app"]?.let { jsonMap["app"] = it }
+            params["message"]?.let { jsonMap["message"] = it }
+            
+            return try {
+                val gson = Gson()
+                val json = gson.toJson(jsonMap)
+                Log.d("ActionExecutor", "成功构建 JSON: $json")
+                json
+            } catch (e: Exception) {
+                Log.w("ActionExecutor", "无法从方括号格式中提取有效参数", e)
+                ""
             }
         } catch (e: Exception) {
             Log.w("ActionExecutor", "修复方括号格式时发生错误", e)

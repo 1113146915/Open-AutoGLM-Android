@@ -259,7 +259,7 @@ fun ChatScreen(
             viewModel = workflowSelectorViewModel,
             onWorkflowSelected = { workflow ->
                 // 将工作流步骤设置为输入框内容
-                userInput = workflow.steps
+                userInput = workflow.generateStepsDescription()
             }
         )
     }

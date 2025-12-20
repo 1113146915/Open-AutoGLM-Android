@@ -4,6 +4,10 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.open_autoglm_android.data.model.Workflow
+import com.example.open_autoglm_android.data.model.WorkflowTemplate
+import com.example.open_autoglm_android.data.model.WorkflowStep
+
+import com.example.open_autoglm_android.data.model.StepParameters
 import com.example.open_autoglm_android.data.repository.WorkflowRepository
 import com.google.gson.Gson
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,7 +32,9 @@ data class WorkflowManagementUiState(
  */
 data class WorkflowEditUiState(
     val title: String = "",
-    val steps: String = "",
+    val description: String = "",
+    val steps: List<WorkflowStep> = emptyList(),
+    val tags: List<String> = emptyList(),
     val isEditing: Boolean = false,
     val workflowId: String? = null,
     val isLoading: Boolean = false,
@@ -51,6 +57,10 @@ class WorkflowViewModel(
     // 编辑界面状态
     private val _editUiState = MutableStateFlow(WorkflowEditUiState())
     val editUiState: StateFlow<WorkflowEditUiState> = _editUiState.asStateFlow()
+    
+    // 模板状态
+    private val _templates = MutableStateFlow<List<WorkflowTemplate>>(emptyList())
+    val templates: StateFlow<List<WorkflowTemplate>> = _templates.asStateFlow()
     
     init {
         loadWorkflows()
@@ -95,7 +105,9 @@ class WorkflowViewModel(
     fun startEditWorkflow(workflow: Workflow) {
         _editUiState.value = WorkflowEditUiState(
             title = workflow.title,
+            description = workflow.description,
             steps = workflow.steps,
+            tags = workflow.tags,
             isEditing = true,
             workflowId = workflow.id
         )
@@ -106,9 +118,20 @@ class WorkflowViewModel(
     }
     
     /**
+     * 根据ID开始编辑工作流
+     */
+    fun startEditWorkflowById(workflowId: String) {
+        val workflowList = workflowRepository.workflows.value
+        val workflow = workflowList.find { it.id == workflowId }
+        if (workflow != null) {
+            startEditWorkflow(workflow)
+        }
+    }
+    
+    /**
      * 结束编辑工作流
      */
-    fun stopEditWorkflow() {
+    fun endEditWorkflow() {
         _editUiState.value = WorkflowEditUiState()
         _managementUiState.value = _managementUiState.value.copy(
             isEditingWorkflow = false,
@@ -118,17 +141,56 @@ class WorkflowViewModel(
     }
     
     /**
-     * 更新工作流标题
+     * 更新编辑中的工作流标题
      */
-    fun updateWorkflowTitle(title: String) {
+    fun updateEditTitle(title: String) {
         _editUiState.value = _editUiState.value.copy(title = title)
+    }
+    
+    /**
+     * 更新编辑中的工作流描述
+     */
+    fun updateEditDescription(description: String) {
+        _editUiState.value = _editUiState.value.copy(description = description)
     }
     
     /**
      * 更新工作流步骤
      */
-    fun updateWorkflowSteps(steps: String) {
+    fun updateEditSteps(steps: List<WorkflowStep>) {
         _editUiState.value = _editUiState.value.copy(steps = steps)
+    }
+    
+    /**
+     * 更新工作流标签
+     */
+    fun updateEditTags(tags: List<String>) {
+        _editUiState.value = _editUiState.value.copy(tags = tags)
+    }
+    
+    /**
+     * 更新工作流标题（保持向后兼容）
+     */
+    fun updateWorkflowTitle(title: String) {
+        updateEditTitle(title)
+    }
+    
+    /**
+     * 更新工作流步骤（保持向后兼容）
+     */
+    fun updateWorkflowSteps(steps: String) {
+        // 将字符串格式转换为结构化步骤
+        val structuredSteps = steps.split("\n")
+            .filter { it.isNotBlank() }
+            .mapIndexed { index, stepText ->
+                WorkflowStep(
+                    id = "step_$index",
+                    name = stepText.trim(),
+                    description = "",
+                    parameters = StepParameters(waitTime = 1000)
+                )
+            }
+        _editUiState.value = _editUiState.value.copy(steps = structuredSteps)
     }
     
     /**
@@ -142,8 +204,8 @@ class WorkflowViewModel(
             return
         }
         
-        if (currentState.steps.isBlank()) {
-            _editUiState.value = currentState.copy(error = "请输入工作流步骤")
+        if (currentState.steps.isEmpty()) {
+            _editUiState.value = currentState.copy(error = "请添加至少一个工作流步骤")
             return
         }
         
@@ -157,7 +219,9 @@ class WorkflowViewModel(
                     if (existingWorkflow != null) {
                         val updatedWorkflow = existingWorkflow.copy(
                             title = currentState.title,
+                            description = currentState.description,
                             steps = currentState.steps,
+                            tags = currentState.tags,
                             updatedTime = System.currentTimeMillis()
                         )
                         workflowRepository.updateWorkflow(updatedWorkflow)
@@ -167,7 +231,9 @@ class WorkflowViewModel(
                     val newWorkflow = Workflow(
                         id = System.currentTimeMillis().toString(),
                         title = currentState.title,
-                        steps = currentState.steps
+                        description = currentState.description,
+                        steps = currentState.steps,
+                        tags = currentState.tags
                     )
                     workflowRepository.addWorkflow(newWorkflow)
                 }
@@ -222,5 +288,132 @@ class WorkflowViewModel(
      */
     fun clearSaveSuccess() {
         _managementUiState.value = _managementUiState.value.copy(saveSuccess = false)
+    }
+    
+    /**
+     * 加载模板列表
+     */
+    fun loadTemplates() {
+        viewModelScope.launch {
+            try {
+                val templateList = workflowRepository.getAllTemplates()
+                _templates.value = templateList
+            } catch (e: Exception) {
+                _managementUiState.value = _managementUiState.value.copy(
+                    error = "加载模板失败: ${e.message}"
+                )
+            }
+        }
+    }
+    
+    /**
+     * 从模板创建工作流
+     */
+    fun createFromTemplate(template: WorkflowTemplate): Workflow {
+        return workflowRepository.createFromTemplate(template)
+    }
+    
+    /**
+     * 创建空工作流
+     */
+    fun createEmptyWorkflow(): Workflow {
+        val workflow = Workflow(
+            id = "workflow_${System.currentTimeMillis()}",
+            title = "新工作流",
+            description = "",
+            steps = listOf(
+                WorkflowStep(
+                    id = "step_1",
+                    name = "步骤1",
+                    description = "请编辑此步骤",
+                    parameters = StepParameters()
+                )
+            ),
+            tags = emptyList()
+        )
+        workflowRepository.addWorkflow(workflow)
+        return workflow
+    }
+    
+    /**
+     * 获取工作流列表（用于Compose）
+     */
+    val workflows = workflowRepository.workflows
+    
+    /**
+     * 更新工作流描述
+     */
+    fun updateWorkflowDescription(description: String) {
+        _editUiState.value = _editUiState.value.copy(description = description)
+    }
+    
+    /**
+     * 更新工作流标签
+     */
+    fun updateWorkflowTags(tags: List<String>) {
+        _editUiState.value = _editUiState.value.copy(tags = tags)
+    }
+    
+    /**
+     * 更新结构化步骤
+     */
+    fun updateStructuredSteps(steps: List<WorkflowStep>) {
+        _editUiState.value = _editUiState.value.copy(steps = steps)
+    }
+    
+    /**
+     * 保存增强版工作流
+     */
+    fun saveEnhancedWorkflow() {
+        val currentState = _editUiState.value
+        
+        if (currentState.title.isBlank()) {
+            _editUiState.value = currentState.copy(error = "请输入工作流标题")
+            return
+        }
+        
+        viewModelScope.launch {
+            try {
+                _editUiState.value = currentState.copy(isLoading = true, error = null)
+                
+                if (currentState.isEditing && currentState.workflowId != null) {
+                    // 更新现有工作流
+                    val existingWorkflow = workflowRepository.getWorkflowById(currentState.workflowId)
+                    if (existingWorkflow != null) {
+                        val updatedWorkflow = existingWorkflow.copy(
+                            title = currentState.title,
+                            description = currentState.description,
+                            steps = currentState.steps,
+                            tags = currentState.tags,
+                            updatedTime = System.currentTimeMillis()
+                        )
+                        workflowRepository.updateWorkflow(updatedWorkflow)
+                    }
+                } else {
+                    // 创建新工作流
+                    val newWorkflow = Workflow(
+                        id = System.currentTimeMillis().toString(),
+                        title = currentState.title,
+                        description = currentState.description,
+                        steps = currentState.steps,
+                        tags = currentState.tags
+                    )
+                    workflowRepository.addWorkflow(newWorkflow)
+                }
+                
+                _editUiState.value = WorkflowEditUiState()
+                _managementUiState.value = _managementUiState.value.copy(
+                    isEditingWorkflow = false,
+                    selectedWorkflow = null,
+                    saveSuccess = true
+                )
+                
+            } catch (e: Exception) {
+                _editUiState.value = currentState.copy(
+                    isLoading = false,
+                    error = "保存失败: ${e.message}"
+                )
+            }
+        }
     }
 }

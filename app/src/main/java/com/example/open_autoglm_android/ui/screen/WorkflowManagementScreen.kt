@@ -18,6 +18,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.open_autoglm_android.data.model.WorkflowStep
+import com.example.open_autoglm_android.data.model.StepParameters
+
 import com.example.open_autoglm_android.data.model.Workflow
 import com.example.open_autoglm_android.ui.viewmodel.WorkflowViewModel
 import java.text.SimpleDateFormat
@@ -41,10 +44,10 @@ fun WorkflowManagementScreen(
         // 显示编辑界面
         WorkflowEditScreen(
             uiState = editUiState,
-            onBackClick = { viewModel.stopEditWorkflow() },
+            onBackClick = { viewModel.endEditWorkflow() },
             onSaveClick = { viewModel.saveWorkflow() },
             onTitleChange = { viewModel.updateWorkflowTitle(it) },
-            onStepsChange = { viewModel.updateWorkflowSteps(it) },
+            onStepsChange = { viewModel.updateEditSteps(it) },
             onClearError = { viewModel.clearEditError() }
         )
     } else {
@@ -257,7 +260,7 @@ private fun WorkflowItem(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = workflow.steps,
+                        text = workflow.generateStepsDescription(),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 3,
@@ -302,7 +305,7 @@ private fun WorkflowEditScreen(
     onBackClick: () -> Unit,
     onSaveClick: () -> Unit,
     onTitleChange: (String) -> Unit,
-    onStepsChange: (String) -> Unit,
+    onStepsChange: (List<WorkflowStep>) -> Unit,
     onClearError: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -390,10 +393,23 @@ private fun WorkflowEditScreen(
         
         Spacer(modifier = Modifier.height(16.dp))
         
-        // 步骤输入
+        // 步骤输入（文本模式）
         OutlinedTextField(
-            value = uiState.steps,
-            onValueChange = onStepsChange,
+            value = uiState.steps.joinToString("\n") { it.name },
+            onValueChange = { stepsText ->
+                // 将文本转换为步骤列表
+                val stepsList = stepsText.split("\n")
+                    .filter { it.isNotBlank() }
+                    .mapIndexed { index, stepText ->
+                        WorkflowStep(
+                            id = "step_$index",
+                            name = stepText.trim(),
+                            description = "",
+                            parameters = StepParameters(waitTime = 1000)
+                        )
+                    }
+                onStepsChange(stepsList)
+            },
             label = { Text("工作流步骤 *") },
             modifier = Modifier
                 .fillMaxWidth()

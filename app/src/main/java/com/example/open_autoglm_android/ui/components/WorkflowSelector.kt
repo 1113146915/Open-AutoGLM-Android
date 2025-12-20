@@ -185,7 +185,7 @@ private fun WorkflowSelectorItem(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = workflow.steps,
+                text = workflow.generateStepsDescription(),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
