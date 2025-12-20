@@ -242,6 +242,15 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
     private fun tryFixMalformedJson(text: String): String {
         Log.d("ActionExecutor", "尝试修复格式错误的 JSON: ${text.take(200)}")
         
+        // 处理方括号格式：[{'Type': 'Type", text="xxx")] -> do(action="Type", text="xxx")
+        if (text.trim().startsWith("[") && (text.contains("'Type'") || text.contains("\"Type\""))) {
+            Log.d("ActionExecutor", "检测到方括号格式，尝试转换")
+            val fixed = fixBracketFormat(text)
+            if (fixed.isNotEmpty()) {
+                return fixed
+            }
+        }
+        
         // 首先尝试提取 do(...) 或 finish(...) 函数调用
         // 模式: do(...) 或 finish(...)
         val functionCallPattern = Regex("""(do|finish)\s*\(([^)]+)\)""", RegexOption.IGNORE_CASE)
@@ -375,7 +384,109 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
     }
     
     /**
-     * 将相对坐标（0-1000）转换为绝对像素坐标
+     * 修复方括号格式的 JSON
+     * 处理：[{'Type': 'Type", text="xxx")] -> do(action="Type", text="xxx")
+     * 
+     * @param text 原始文本
+     * @return 修复后的标准格式，如果无法修复则返回空字符串
+     */
+    private fun fixBracketFormat(text: String): String {
+        try {
+            Log.d("ActionExecutor", "开始修复方括号格式: ${text.take(200)}")
+            
+            // 移除外层方括号
+            val innerContent = text.trim().removeSurrounding("[", "]")
+            Log.d("ActionExecutor", "移除方括号后: ${innerContent.take(200)}")
+            
+            // 修复引号嵌套问题：'Type\' -> Type, "Type" -> Type
+            var fixedContent = innerContent
+                .replace("'Type\\'", "Type")
+                .replace("\"Type\"", "Type")
+                .replace("'Type'", "Type")
+                .replace("\"Type\\\"", "Type")
+                .replace("'Type\\\"", "Type")
+                .replace("'Type\\\"", "Type")
+                .replace("'Type\\\"", "Type")
+            
+            Log.d("ActionExecutor", "修复引号后: ${fixedContent.take(200)}")
+            
+            // 提取参数
+            val params = mutableMapOf<String, String>()
+            
+            // 提取 action 参数
+            val actionPattern = Regex("""(?:Type|action)\s*[:=]\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            val actionMatch = actionPattern.find(fixedContent)
+            if (actionMatch != null) {
+                params["action"] = actionMatch.groupValues[1]
+                Log.d("ActionExecutor", "提取到 action: ${params["action"]}")
+            }
+            
+            // 提取 text 参数
+            val textPattern = Regex("""text\s*[:=]\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+            val textMatch = textPattern.find(fixedContent)
+            if (textMatch != null) {
+                params["text"] = textMatch.groupValues[1]
+                Log.d("ActionExecutor", "提取到 text: ${params["text"]}")
+            }
+            
+            // 提取 element 参数
+            val elementPattern = Regex("""element\s*[:=]\s*\[([^\]]+)\]""", RegexOption.IGNORE_CASE)
+            val elementMatch = elementPattern.find(fixedContent)
+            if (elementMatch != null) {
+                params["element"] = "[${elementMatch.groupValues[1]}]"
+                Log.d("ActionExecutor", "提取到 element: ${params["element"]}")
+            }
+            
+            // 提取 message 参数
+            val messagePattern = Regex("""message\s*[:=]\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+            val messageMatch = messagePattern.find(fixedContent)
+            if (messageMatch != null) {
+                params["message"] = messageMatch.groupValues[1]
+                Log.d("ActionExecutor", "提取到 message: ${params["message"]}")
+            }
+            
+            // 根据 action 类型构建标准格式
+            return when (params["action"]?.lowercase()) {
+                "type" -> {
+                    val text = params["text"] ?: ""
+                    """do(action="Type", text="$text")"""
+                }
+                "tap" -> {
+                    val element = params["element"] ?: ""
+                    val message = params["message"]
+                    return if (message != null) {
+                        """do(action="Tap", element=$element, message="$message")"""
+                    } else {
+                        """do(action="Tap", element=$element)"""
+                    }
+                }
+                "launch" -> {
+                    val app = params["app"] ?: params["message"] ?: ""
+                    """do(action="Launch", app="$app")"""
+                }
+                "finish" -> {
+                    val message = params["message"] ?: ""
+                    """finish(message="$message")"""
+                }
+                else -> {
+                    // 如果没有识别到 action，但有 text，默认为 Type 操作
+                    val text = params["text"] ?: ""
+                    if (text.isNotEmpty()) {
+                        """do(action="Type", text="$text")"""
+                    } else {
+                        Log.w("ActionExecutor", "无法从方括号格式中提取有效参数")
+                        ""
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("ActionExecutor", "修复方括号格式时发生错误", e)
+            return ""
+        }
+    }
+    
+    /**
+     * 将相对坐标（转换为绝对像素坐标
      * 参考原项目的 _convert_relative_to_absolute 方法
      */
     private fun convertRelativeToAbsolute(
