@@ -32,7 +32,7 @@ class CustomLoggingInterceptor : Interceptor {
             val charset = contentType?.charset() ?: Charsets.UTF_8
             
             val requestString = buffer.readString(charset)
-            val filteredRequest = filterBase64FromJson(requestString)
+            val filteredRequest = filterSystemPromptAndBase64(requestString)
             
             Log.d("API_REQUEST", "请求体: $filteredRequest")
         }
@@ -55,48 +55,82 @@ class CustomLoggingInterceptor : Interceptor {
     }
     
     /**
-     * 过滤JSON中的Base64图片数据
+     * 过滤JSON中的系统提示词和Base64图片数据，只保留当前请求的关键信息
+     * 只保留最后4条消息（系统提示词 + 最近3条对话），避免日志过长
      */
-    private fun filterBase64FromJson(jsonString: String): String {
+    private fun filterSystemPromptAndBase64(jsonString: String): String {
         return try {
             val jsonObject = JSONObject(jsonString)
             
-            // 处理messages数组中的图片数据
+            // 处理messages数组，只保留最近的消息
             if (jsonObject.has("messages")) {
                 val messages = jsonObject.getJSONArray("messages")
-                for (i in 0 until messages.length()) {
+                val simplifiedMessages = JSONArray()
+                
+                // 计算起始索引，只保留最后4条消息
+                val startIndex = maxOf(0, messages.length() - 4)
+                
+                for (i in startIndex until messages.length()) {
                     val message = messages.getJSONObject(i)
+                    val simplifiedMessage = JSONObject()
                     
-                    // 处理content字段（可能是字符串或数组）
+                    // 保留role字段
+                    if (message.has("role")) {
+                        simplifiedMessage.put("role", message.getString("role"))
+                    }
+                    
+                    // 过滤系统提示词
+                    if (message.has("role") && message.getString("role") == "system") {
+                        simplifiedMessage.put("content", "[系统提示词已过滤]")
+                        simplifiedMessages.put(simplifiedMessage)
+                        continue
+                    }
+                    
+                    // 处理content字段，只保留text内容
                     if (message.has("content")) {
                         val content = message.get("content")
                         when (content) {
                             is String -> {
                                 // 简单字符串内容，直接保留
+                                simplifiedMessage.put("content", content)
                             }
                             is JSONArray -> {
-                                // 数组形式的内容，可能包含图片
+                                // 数组形式的内容，只提取text字段
+                                val textContents = mutableListOf<String>()
                                 for (j in 0 until content.length()) {
                                     val contentItem = content.getJSONObject(j)
-                                    if (contentItem.has("type") && contentItem.getString("type") == "image_url") {
-                                        // 替换图片的Base64数据为提示信息
-                                        val imageUrl = contentItem.getJSONObject("image_url")
-                                        if (imageUrl.has("url") && imageUrl.getString("url").startsWith("data:image/")) {
-                                            val mimeType = imageUrl.getString("url").substringAfter("data:").substringBefore(";base64")
-                                            imageUrl.put("url", "[$mimeType 图片数据已过滤]")
+                                    if (contentItem.has("type") && contentItem.getString("type") == "text") {
+                                        if (contentItem.has("text")) {
+                                            textContents.add(contentItem.getString("text"))
                                         }
+                                    } else if (contentItem.has("type") && contentItem.getString("type") == "image_url") {
+                                        // 图片信息简化
+                                        textContents.add("[图片]")
                                     }
                                 }
+                                simplifiedMessage.put("content", textContents.joinToString(""))
                             }
                         }
                     }
+                    
+                    simplifiedMessages.put(simplifiedMessage)
                 }
+                
+                // 替换原有的messages数组为简化的最近消息
+                jsonObject.put("messages", simplifiedMessages)
             }
             
-            jsonObject.toString(2) // 格式化输出，提高可读性
+            // 创建简化版本，只保留关键请求参数
+            val simplifiedRequest = JSONObject()
+            simplifiedRequest.put("model", jsonObject.optString("model", ""))
+            simplifiedRequest.put("messages", jsonObject.optJSONArray("messages"))
+            simplifiedRequest.put("temperature", jsonObject.optDouble("temperature", 0.0))
+            simplifiedRequest.put("max_tokens", jsonObject.optInt("max_tokens", 0))
+            
+            simplifiedRequest.toString(2) // 格式化输出，提高可读性
         } catch (e: Exception) {
-            // 如果JSON解析失败，返回原始字符串的前500字符
-            jsonString.take(500) + if (jsonString.length > 500) "..." else ""
+            // 如果JSON解析失败，返回简化的错误信息
+            "请求解析失败: ${e.message}"
         }
     }
 }
@@ -239,7 +273,7 @@ class ModelClient(
     /**
      * 构建屏幕信息（与旧项目保持一致，返回 JSON 字符串，如 {"current_app": "System Home"}）
      */
-    private fun buildScreenInfo(currentApp: String?): String {
+    fun buildScreenInfo(currentApp: String?): String {
         val appName = currentApp ?: "Unknown"
         // 简单 JSON，字段名与旧项目保持一致
         return """{"current_app": "$appName"}"""
@@ -313,25 +347,15 @@ class ModelClient(
     finish是结束任务的操作，表示准确完整完成任务，message是终止信息。 
 
 必须遵循的规则：
-1. 【核心检查】在执行每个动作前，必须先检查上一步动作效果是否正确：
-   - 上一步的点击是否成功进入目标页面？
-   - 上一步的输入是否正确填充到输入框？
-   - 上一步的滑动是否显示了期望的内容？
-   - 如果上一步动作未生效，先等待1-2秒，然后重新执行或调整位置重试，最多重试2次。
-   - 只有确认上一步动作生效后，才能执行下一步动作。
-
-2. 【页面状态验证】在执行任何操作前，先检查当前页面是否是执行下一步动作的正确界面：
-   - 确认当前页面包含执行下一步操作所需的元素（输入框、按钮、列表等）
-   - 如果页面状态不正确，先执行导航操作（Back、Home、Launch等）到达正确界面
-   - 记录页面状态变化，确保每步操作都在预期界面上进行。
-
-3. 在执行任何操作前，先检查当前app是否是目标app，如果不是，先执行 Launch，不要执行其他操作（如Home,Back等）。
+1. 每个步骤中launch执行失败一次则不再使用launch，应返回桌面从应用列表中通过识别目标应用所在位置通过模拟点击的方式打开应用。
+2. 如果launch后页面相似度100%页面无任何变化，则应返回桌面从应用列表中通过识别目标应用所在位置通过模拟点击的方式打开应用。
+3. 如果发现疑似弹窗广告的区域，则寻找“跳过”或“关闭”或“X”等关闭按钮，并模拟点击。
 4. 如果进入到了无关页面，先执行 Back。如果执行Back后页面没有变化，请点击页面左上角的返回键进行返回，或者右上角的X号关闭。
-5. 如果页面未加载出内容，最多连续 Wait 三次，否则执行 Back重新进入。
-6. 如果页面显示网络问题，需要重新加载，请点击重新加载。
-7. 如果当前页面找不到目标联系人、商品、店铺等信息，可以尝试 Swipe 滑动查找。
-8. 遇到价格区间、时间区间等筛选条件，如果没有完全符合的，可以放宽要求。
-9. 在做小红书总结类任务时一定要筛选图文笔记。
+5. 如果页面显示正在加且未加载出内容，最多连续 Wait两次，否则执行 Back重新进入。
+6. 每个步骤执行完成后主动检查所在页面是否是该步骤完成后的页面，如未显示则上一步，并等待1秒。
+7. 如果页面显示网络问题，需要重新加载，请点击重新加载。
+8. 如果当前页面找不到目标联系人、商品、店铺等信息，可以尝试 Swipe 滑动查找。
+9. 遇到价格区间、时间区间等筛选条件，如果没有完全符合的，可以放宽要求。
 10. 购物车全选后再点击全选可以把状态设为全不选，在做购物车任务时，如果购物车里已经有商品被选中时，你需要点击全选后再点击取消全选，再去找需要购买或者删除的商品。
 11. 在做外卖任务时，如果相应店铺购物车里已经有其他商品你需要先把购物车清空再去购买用户指定的外卖。
 12. 在做点外卖任务时，如果用户需要点多个外卖，请尽量在同一店铺进行购买，如果无法找到可以下单，并说明某个商品未找到。
@@ -345,8 +369,6 @@ class ModelClient(
     
     
     private fun parseResponse(content: String): ModelResponse {
-        Log.d("ModelClient", "解析响应内容: ${content.take(500)}")
-        
         // 对齐 Python 版本的解析逻辑：优先按 finish/do 分割，其次 <answer>，最后兜底
         var thinking = ""
         var action = ""
@@ -356,14 +378,12 @@ class ModelClient(
             val parts = content.split("finish(message=", limit = 2)
             thinking = parts[0].trim()
             action = "finish(message=" + parts[1]
-            Log.d("ModelClient", "按 finish(message= 分割得到 action: $action")
         }
         // 规则 2：do(action= ... )
         else if (content.contains("do(action=")) {
             val parts = content.split("do(action=", limit = 2)
             thinking = parts[0].trim()
             action = "do(action=" + parts[1]
-            Log.d("ModelClient", "按 do(action= 分割得到 action: $action")
         }
         // 规则 3：<answer> 标签
         else if (content.contains("<answer>")) {
@@ -373,12 +393,10 @@ class ModelClient(
                 .replace("</think>", "")
                 .trim()
             action = parts[1].replace("</answer>", "").trim()
-            Log.d("ModelClient", "按 <answer> 标签解析 action: $action")
         }
         // 规则 4：兜底
         else {
             action = content.trim()
-            Log.w("ModelClient", "未命中任何标记，使用全文作为 action")
         }
         
         

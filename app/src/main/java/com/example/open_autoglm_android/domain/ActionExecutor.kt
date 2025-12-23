@@ -7,6 +7,7 @@ import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import com.example.open_autoglm_android.service.AutoGLMAccessibilityService
+import com.example.open_autoglm_android.util.BitmapUtils
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
@@ -17,7 +18,9 @@ import java.io.StringReader
 
 data class ExecuteResult(
     val success: Boolean,
-    val message: String? = null
+    val message: String? = null,
+    val pageChanged: Boolean? = null,
+    val similarityScore: Double? = null
 )
 
 class ActionExecutor(private val service: AutoGLMAccessibilityService) {
@@ -109,7 +112,7 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
             }
             "do" -> {
                 val action = actionObj.get("action")?.asString ?: ""
-                executeAction(action, actionObj, screenWidth, screenHeight)
+                executeActionWithEffectCheck(action, actionObj, screenWidth, screenHeight)
             }
             else -> {
                 ExecuteResult(success = false, message = "未知的动作类型: $metadata")
@@ -125,13 +128,21 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
         val trimmed = text.trim()
         Log.d("ActionExecutor", "extractJsonFromText 输入: ${trimmed.take(200)}")
         
-        // 如果文本已经是有效的 JSON，直接返回
+        // 如果文本已经是有效的 JSON，检查是否包含 _metadata 字段
         if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
             try {
-                // 验证是否是有效的 JSON
-                JsonParser.parseString(trimmed)
-                Log.d("ActionExecutor", "文本已经是有效的 JSON")
-                return trimmed
+                val jsonElement = JsonParser.parseString(trimmed)
+                if (jsonElement.isJsonObject) {
+                    val hasMetadata = jsonElement.asJsonObject.has("_metadata")
+                    if (hasMetadata) {
+                        Log.d("ActionExecutor", "文本已经是有效的 JSON 且包含 _metadata")
+                        return trimmed
+                    } else {
+                        Log.d("ActionExecutor", "文本是有效的 JSON 但缺少 _metadata 字段，尝试修复")
+                    }
+                } else {
+                    Log.d("ActionExecutor", "文本看起来像 JSON 但解析失败，继续处理")
+                }
             } catch (e: Exception) {
                 Log.d("ActionExecutor", "文本看起来像 JSON 但解析失败，继续处理")
             }
@@ -169,10 +180,40 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
             }
         }
         
-        // 返回第一个有效的 JSON 对象
+        // 返回第一个有效的 JSON 对象，但要检查是否包含 _metadata 字段
         if (jsonCandidates.isNotEmpty()) {
-            Log.d("ActionExecutor", "返回第一个有效的 JSON 候选")
-            return jsonCandidates.first()
+            val candidate = jsonCandidates.first()
+            Log.d("ActionExecutor", "找到有效的 JSON 候选: ${candidate.take(100)}")
+            
+            // 检查是否包含 _metadata 字段
+            val hasMetadata = try {
+                val jsonElement = JsonParser.parseString(candidate)
+                if (jsonElement.isJsonObject) {
+                    jsonElement.asJsonObject.has("_metadata")
+                } else {
+                    false
+                }
+            } catch (e: Exception) {
+                false
+            }
+            
+            if (hasMetadata) {
+                Log.d("ActionExecutor", "JSON 包含 _metadata 字段，直接返回")
+                return candidate
+            } else {
+                Log.d("ActionExecutor", "JSON 缺少 _metadata 字段，尝试修复")
+                val fixedJson = tryFixMalformedJson(trimmed)
+                if (fixedJson.isNotEmpty()) {
+                    try {
+                        JsonParser.parseString(fixedJson)
+                        Log.d("ActionExecutor", "修复后的 JSON 有效: $fixedJson")
+                        return fixedJson
+                    } catch (e2: Exception) {
+                        Log.w("ActionExecutor", "修复后的 JSON 仍然无效，返回原始候选")
+                    }
+                }
+                return candidate
+            }
         }
         
         // 如果找不到完整的 JSON，尝试修复格式错误的 JSON
@@ -246,6 +287,15 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
         // 处理方括号格式：[{'type': 'Tap", element=[805,655])] -> do(action="Tap", element=[805,655])
         if (text.trim().startsWith("[") && (text.contains("'type'") || text.contains("\"type\"") || text.contains("'Type'") || text.contains("\"Type\""))) {
             Log.d("ActionExecutor", "检测到方括号格式，尝试转换")
+            val fixed = fixBracketFormat(text)
+            if (fixed.isNotEmpty()) {
+                return fixed
+            }
+        }
+        
+        // 处理花括号格式的单引号 JSON：{'type': 'Home'} -> {"_metadata": "do", "action": "Home"}
+        if (text.trim().startsWith("{") && (text.contains("'type'") || text.contains("'action'") || text.contains("'Type'") || text.contains("'Action'"))) {
+            Log.d("ActionExecutor", "检测到花括号单引号格式，尝试转换")
             val fixed = fixBracketFormat(text)
             if (fixed.isNotEmpty()) {
                 return fixed
@@ -385,22 +435,24 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
     }
     
     /**
-     * 修复方括号格式的 JSON
-     * 处理：[{'Type': 'Type", text="xxx")] -> do(action="Type", text="xxx")
+     * 修复方括号或花括号格式的 JSON
+     * 处理：[{'type': 'Home'}], [{'type': 'Tap', 'element': [805,655]}], {'type': 'Home'}
+     * 统一将单引号转换为双引号，并添加 _metadata 字段
      * 
      * @param text 原始文本
      * @return 修复后的标准格式，如果无法修复则返回空字符串
      */
     private fun fixBracketFormat(text: String): String {
         try {
-            Log.d("ActionExecutor", "开始修复方括号格式: ${text.take(200)}")
+            Log.d("ActionExecutor", "开始修复方括号/花括号格式: ${text.take(200)}")
             
-            // 移除外层方括号，处理各种格式
+            // 移除外层方括号或花括号，处理各种格式
             var innerContent = text.trim()
-            // 处理 [{...}] 或 {...}] 格式
             if (innerContent.startsWith("[{")) {
                 innerContent = innerContent.substring(2)
             } else if (innerContent.startsWith("[")) {
+                innerContent = innerContent.substring(1)
+            } else if (innerContent.startsWith("{")) {
                 innerContent = innerContent.substring(1)
             }
             // 移除末尾的 ] 或 )
@@ -408,59 +460,85 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
                 innerContent = innerContent.dropLast(2)
             } else if (innerContent.endsWith("]")) {
                 innerContent = innerContent.dropLast(1)
+            } else if (innerContent.endsWith("}")) {
+                innerContent = innerContent.dropLast(1)
             } else if (innerContent.endsWith(")")) {
                 innerContent = innerContent.dropLast(1)
             }
-            Log.d("ActionExecutor", "移除方括号后: ${innerContent.take(200)}")
+            Log.d("ActionExecutor", "移除括号后: ${innerContent.take(200)}")
             
-            // 修复引号嵌套问题：'Type\' -> Type, "Type" -> Type, 'type' -> Type, "type" -> Type
-            var fixedContent = innerContent
-                .replace("'Type\\'", "Type")
-                .replace("\"Type\"", "Type")
-                .replace("'Type'", "Type")
-                .replace("\"Type\\\"", "Type")
-                .replace("'Type\\\"", "Type")
-                .replace("'Type\\\"", "Type")
-                .replace("'Type\\\"", "Type")
-                // 修复 type 字段的各种引号组合
-                .replace("'type':", "action:")
-                .replace("\"type\":", "action:")
-                .replace("'type' =", "action =")
-                .replace("\"type\" =", "action =")
-                // 修复引号不匹配问题
-                .replace("'Tap\"", "\"Tap\"")
-                .replace("'Tap\"", "\"Tap\"")
-                .replace("'Type\"", "\"Type\"")
-                .replace("'launch\"", "\"launch\"")
-                .replace("'Launch\"", "\"Launch\"")
-                .replace("'type'", "\"action\"")
-                .replace("\"type\"", "\"action\"")
-                // 修复混合引号问题：'value" -> "value", "value' -> "value"
-                .replace("'Tap\"", "\"Tap\"")
-                .replace("'type\"", "\"action\"")
-                .replace("'Type\"", "\"Type\"")
-                .replace("'launch\"", "\"launch\"")
-                .replace("'swipe\"", "\"swipe\"")
-                .replace("'Swipe\"", "\"Swipe\"")
-                .replace("'Wait\"", "\"Wait\"")
-                .replace("'wait\"", "\"wait\"")
+            // 统一将所有单引号转换为双引号，生成有效的JSON
+            var fixedContent = innerContent.replace("'", "\"")
+            Log.d("ActionExecutor", "转换为双引号后: ${fixedContent.take(200)}")
             
-            Log.d("ActionExecutor", "修复引号后: ${fixedContent.take(200)}")
-            
-            // 提取参数
+            // 尝试直接解析为JSON
+            val jsonParser = JsonParser()
+            return try {
+                val jsonElement = jsonParser.parse(fixedContent)
+                val jsonObject = jsonElement.asJsonObject
+                
+                // 构建标准格式的JSON，包含 _metadata 字段
+                val jsonMap = mutableMapOf<String, Any>("_metadata" to "do")
+                
+                // 提取 action 参数（支持 type 和 action 字段名）
+                val action = jsonObject.get("type")?.asString ?: jsonObject.get("action")?.asString
+                if (action != null) {
+                    jsonMap["action"] = action
+                }
+                
+                // 提取 text 参数
+                jsonObject.get("text")?.asString?.let { jsonMap["text"] = it }
+                
+                // 提取 element 参数（数组形式）
+                jsonObject.get("element")?.asJsonArray?.let { elementArray ->
+                    val coordinates = elementArray.map { it.asInt }
+                    jsonMap["element"] = coordinates
+                }
+                
+                // 提取 message 参数
+                jsonObject.get("message")?.asString?.let { jsonMap["message"] = it }
+                
+                // 提取 duration 参数
+                jsonObject.get("duration")?.asString?.let { jsonMap["duration"] = it }
+                
+                // 提取 app 参数
+                jsonObject.get("app")?.asString?.let { jsonMap["app"] = it }
+                
+                // 转换为JSON字符串
+                val gson = Gson()
+                val json = gson.toJson(jsonMap)
+                Log.d("ActionExecutor", "成功构建标准JSON: $json")
+                json
+            } catch (e: Exception) {
+                Log.w("ActionExecutor", "直接解析失败，尝试参数提取", e)
+                extractParamsFromText(fixedContent)
+            }
+        } catch (e: Exception) {
+            Log.w("ActionExecutor", "修复方括号格式时发生错误", e)
+            return ""
+        }
+    }
+    
+    /**
+     * 从文本中提取参数并构建标准JSON格式
+     * @param text 包含参数的文本
+     * @return 标准JSON格式的字符串
+     */
+    private fun extractParamsFromText(text: String): String {
+        try {
             val params = mutableMapOf<String, String>()
             
             // 提取 action 参数
-            val actionPattern = Regex("""(?:type|action)\s*[:=]\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
-            val actionMatch = actionPattern.find(fixedContent)
+            val actionPattern = Regex("""(?:type|action)\s*[:=]\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
+            val actionMatch = actionPattern.find(text)
             if (actionMatch != null) {
                 params["action"] = actionMatch.groupValues[1]
                 Log.d("ActionExecutor", "提取到 action: ${params["action"]}")
             }
             
             // 提取 text 参数
-            val textPattern = Regex("""text\s*[:=]\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
-            val textMatch = textPattern.find(fixedContent)
+            val textPattern = Regex("""text\s*[:=]\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
+            val textMatch = textPattern.find(text)
             if (textMatch != null) {
                 params["text"] = textMatch.groupValues[1]
                 Log.d("ActionExecutor", "提取到 text: ${params["text"]}")
@@ -468,26 +546,34 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
             
             // 提取 element 参数
             val elementPattern = Regex("""element\s*[:=]\s*\[([^\]]+)\]""", RegexOption.IGNORE_CASE)
-            val elementMatch = elementPattern.find(fixedContent)
+            val elementMatch = elementPattern.find(text)
             if (elementMatch != null) {
                 params["element"] = "[${elementMatch.groupValues[1]}]"
                 Log.d("ActionExecutor", "提取到 element: ${params["element"]}")
             }
             
             // 提取 message 参数
-            val messagePattern = Regex("""message\s*[:=]\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
-            val messageMatch = messagePattern.find(fixedContent)
+            val messagePattern = Regex("""message\s*[:=]\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
+            val messageMatch = messagePattern.find(text)
             if (messageMatch != null) {
                 params["message"] = messageMatch.groupValues[1]
                 Log.d("ActionExecutor", "提取到 message: ${params["message"]}")
             }
             
             // 提取 duration 参数
-            val durationPattern = Regex("""duration\s*[:=]\s*["']([^"']*)["']""", RegexOption.IGNORE_CASE)
-            val durationMatch = durationPattern.find(fixedContent)
+            val durationPattern = Regex("""duration\s*[:=]\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
+            val durationMatch = durationPattern.find(text)
             if (durationMatch != null) {
                 params["duration"] = durationMatch.groupValues[1]
                 Log.d("ActionExecutor", "提取到 duration: ${params["duration"]}")
+            }
+            
+            // 提取 app 参数
+            val appPattern = Regex("""app\s*[:=]\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
+            val appMatch = appPattern.find(text)
+            if (appMatch != null) {
+                params["app"] = appMatch.groupValues[1]
+                Log.d("ActionExecutor", "提取到 app: ${params["app"]}")
             }
             
             // 根据 action 类型构建 JSON 格式
@@ -514,11 +600,11 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
                 Log.d("ActionExecutor", "成功构建 JSON: $json")
                 json
             } catch (e: Exception) {
-                Log.w("ActionExecutor", "无法从方括号格式中提取有效参数", e)
+                Log.w("ActionExecutor", "无法从文本中提取有效参数", e)
                 ""
             }
         } catch (e: Exception) {
-            Log.w("ActionExecutor", "修复方括号格式时发生错误", e)
+            Log.w("ActionExecutor", "提取参数时发生错误", e)
             return ""
         }
     }
@@ -535,6 +621,94 @@ class ActionExecutor(private val service: AutoGLMAccessibilityService) {
         val x = (element[0] / 1000f) * screenWidth
         val y = (element[1] / 1000f) * screenHeight
         return Pair(x, y)
+    }
+    
+    /**
+     * 执行动作并检查执行效果
+     * 通过比较执行前后的页面相似度来判断命令是否真正执行成功
+     */
+    private suspend fun executeActionWithEffectCheck(
+        action: String,
+        actionObj: JsonObject,
+        screenWidth: Int,
+        screenHeight: Int
+    ): ExecuteResult {
+        // 记录执行前的页面状态
+        val beforeScreenshot = service.takeScreenshotSuspend()
+        
+        // 执行动作
+        val basicResult = executeAction(action, actionObj, screenWidth, screenHeight)
+        
+        // 如果基本执行失败，直接返回失败结果
+        if (!basicResult.success) {
+            return basicResult
+        }
+        
+        // 等待页面响应
+        delay(1000)
+        
+        // 获取执行后的页面状态
+        val afterScreenshot = service.takeScreenshotSuspend()
+        
+        // 检查页面是否发生变化
+        if (beforeScreenshot != null && afterScreenshot != null) {
+            val similarity = BitmapUtils.calculateSimilarity(beforeScreenshot, afterScreenshot)
+            val pageChanged = !BitmapUtils.areSimilar(beforeScreenshot, afterScreenshot, threshold = 0.95)
+            
+            Log.i("ActionExecutor", "执行效果检查: 动作=$action, " +
+                    "页面变化=${if (pageChanged) "是" else "否"}, " +
+                    "相似度=${String.format("%.2f%%", similarity * 100)}")
+            
+            // 根据动作类型判断是否需要页面变化
+            val shouldChangePage = shouldActionChangePage(action)
+            val actualSuccess = if (shouldChangePage) {
+                pageChanged // 需要页面变化的动作，检查页面是否真的变化了
+            } else {
+                true // 不需要页面变化的动作，只要基本执行成功即可
+            }
+            
+            if (!actualSuccess && shouldChangePage) {
+                Log.w("ActionExecutor", "动作执行可能失败: $action, 页面未发生明显变化")
+                return ExecuteResult(
+                    success = false,
+                    message = "动作执行成功但页面未发生变化，可能执行失败: $action",
+                    pageChanged = pageChanged,
+                    similarityScore = similarity
+                )
+            }
+            
+            return ExecuteResult(
+                success = true,
+                message = basicResult.message,
+                pageChanged = pageChanged,
+                similarityScore = similarity
+            )
+        } else {
+            Log.w("ActionExecutor", "无法获取截图进行效果检查，返回基本执行结果")
+            return ExecuteResult(
+                success = true,
+                message = basicResult.message + "（无法验证执行效果）"
+            )
+        }
+    }
+    
+    /**
+     * 判断某个动作是否应该导致页面变化
+     */
+    private fun shouldActionChangePage(action: String): Boolean {
+        val actionLower = action.lowercase()
+        return when (actionLower) {
+            "launch" -> true
+            "tap" -> true
+            "swipe" -> true
+            "back" -> true
+            "home" -> true
+            "longpress", "long press" -> true
+            "doubletap", "double tap" -> true
+            "type" -> false // 输入文字通常不会导致整个页面变化
+            "wait" -> false // 等待不会导致页面变化
+            else -> false
+        }
     }
     
     private suspend fun executeAction(

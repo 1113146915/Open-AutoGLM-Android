@@ -144,7 +144,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val apiKey = preferencesRepository.getApiKeySync() ?: "EMPTY"
                 val modelName = preferencesRepository.getModelNameSync()
                 
-                if (apiKey == null || apiKey.isEmpty() || apiKey == "EMPTY") {
+                if (apiKey.isEmpty() || apiKey == "EMPTY") {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         error = "请先在设置页面配置 API Key"
@@ -192,7 +192,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 return
             }
             
-            Log.d("ChatViewModel", "执行步骤 $stepCount")
+            Log.d("ChatViewModel", "======== 执行步骤 $stepCount ========")
             
             // 截图
             val screenshot = accessibilityService.takeScreenshotSuspend()
@@ -242,9 +242,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     messageContext.add(client.createSystemMessage())
                 }
                 messageContext.add(client.createUserMessage(userPrompt, screenshot, currentApp))
+                
+                // 记录用户提示词完整内容
+                Log.d("ChatViewModel", "--- 用户提示词 ---")
+                Log.d("ChatViewModel", userPrompt)
+                Log.d("ChatViewModel", "--- 提示词结束 ---")
             } else {
                 // 后续调用：只添加屏幕信息
                 messageContext.add(client.createScreenInfoMessage(screenshot, currentApp))
+                
+                // 屏幕信息日志已移除（无意义信息）
             }
             
             // 再次检查任务是否已被停止
@@ -274,7 +281,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 return
             }
-            Log.d("ChatViewModel", "模型响应: thinking=${response.thinking.take(100)}, action=${response.action.take(100)}")
+            // 记录模型返回的完整内容
+            Log.d("ChatViewModel", "--- 模型思考内容 ---")
+            Log.d("ChatViewModel", response.thinking)
+            Log.d("ChatViewModel", "--- 模型动作内容 ---")
+            Log.d("ChatViewModel", response.action)
+            Log.d("ChatViewModel", "--- 模型响应结束 ---")
             
             // 添加助手消息到上下文
             messageContext.add(client.createAssistantMessage(response.thinking, response.action))
@@ -336,7 +348,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 screenshot.width,
                 screenshot.height
             )
-            Log.d("ChatViewModel", "动作执行结果: success=${result.success}, message=${result.message}")
+            // 记录动作执行结果
+            Log.d("ChatViewModel", "--- 动作执行结果 ---")
+            Log.d("ChatViewModel", "执行成功: ${result.success}")
+            Log.d("ChatViewModel", "执行信息: ${result.message}")
+            result.pageChanged?.let { 
+                Log.d("ChatViewModel", "页面变化: ${if (it) "是" else "否"}")
+            }
+            result.similarityScore?.let { 
+                Log.d("ChatViewModel", "页面相似度: ${String.format("%.2f%%", it * 100)}")
+            }
+            Log.d("ChatViewModel", "--- 执行结果结束 ---")
             
             val isFinished = result.message != null && (result.message!!.contains("完成") || 
                 result.message!!.contains("finish")) || 

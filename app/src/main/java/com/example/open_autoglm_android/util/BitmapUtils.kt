@@ -10,6 +10,106 @@ object BitmapUtils {
      * @param threshold 阈值，如果黑色像素比例超过此值，认为是全黑（默认 0.98，即 98%）
      * @return true 如果位图是全黑的
      */
+    
+    /**
+     * 计算两个位图的相似度
+     * @param bitmap1 第一个位图
+     * @param bitmap2 第二个位图
+     * @param threshold 相似度阈值，超过此值认为相似（默认 0.9，即 90%）
+     * @return 相似度百分比 (0.0 - 1.0)
+     */
+    fun calculateSimilarity(bitmap1: Bitmap, bitmap2: Bitmap, threshold: Double = 0.9): Double {
+        if (bitmap1.width == 0 || bitmap1.height == 0 || bitmap2.width == 0 || bitmap2.height == 0) {
+            Log.w("BitmapUtils", "位图尺寸为 0")
+            return 0.0
+        }
+        
+        // 如果位图尺寸不同，缩放到相同尺寸
+        val targetWidth = minOf(bitmap1.width, bitmap2.width)
+        val targetHeight = minOf(bitmap1.height, bitmap2.height)
+        
+        val scaledBitmap1 = if (bitmap1.width != targetWidth || bitmap1.height != targetHeight) {
+            Bitmap.createScaledBitmap(bitmap1, targetWidth, targetHeight, false)
+        } else bitmap1
+        
+        val scaledBitmap2 = if (bitmap2.width != targetWidth || bitmap2.height != targetHeight) {
+            Bitmap.createScaledBitmap(bitmap2, targetWidth, targetHeight, false)
+        } else bitmap2
+        
+        val tempBitmap1 = if (scaledBitmap1 !== bitmap1) scaledBitmap1 else null
+        val tempBitmap2 = if (scaledBitmap2 !== bitmap2) scaledBitmap2 else null
+        
+        try {
+            val targetBitmap1 = tempBitmap1 ?: bitmap1
+            val targetBitmap2 = tempBitmap2 ?: bitmap2
+            
+            var samePixels = 0
+            var totalPixels = 0
+            var totalDiff = 0
+            
+            // 采样比较
+            val stepX = maxOf(1, targetWidth / 20)
+            val stepY = maxOf(1, targetHeight / 20)
+            
+            for (y in 0 until targetHeight step stepY) {
+                for (x in 0 until targetWidth step stepX) {
+                    val pixel1 = targetBitmap1.getPixel(x, y)
+                    val pixel2 = targetBitmap2.getPixel(x, y)
+                    
+                    val r1 = (pixel1 shr 16) and 0xFF
+                    val g1 = (pixel1 shr 8) and 0xFF
+                    val b1 = pixel1 and 0xFF
+                    
+                    val r2 = (pixel2 shr 16) and 0xFF
+                    val g2 = (pixel2 shr 8) and 0xFF
+                    val b2 = pixel2 and 0xFF
+                    
+                    val diff = kotlin.math.abs(r1 - r2) + kotlin.math.abs(g1 - g2) + kotlin.math.abs(b1 - b2)
+                    totalDiff += diff
+                    
+                    // 如果差异很小（小于30），认为是相似像素
+                    if (diff < 30) {
+                        samePixels++
+                    }
+                    totalPixels++
+                }
+            }
+            
+            val similarity = samePixels.toDouble() / totalPixels
+            val avgDiff = totalDiff.toDouble() / (totalPixels * 3 * 255) // 归一化到 0-1
+            val finalSimilarity = similarity * (1 - avgDiff * 0.3) // 综合相似度
+            
+            Log.d("BitmapUtils", "相似度检测: 尺寸=${targetWidth}x${targetHeight}, " +
+                    "采样点数=$totalPixels, 相同像素=$samePixels, " +
+                    "相似度=${String.format("%.2f%%", finalSimilarity * 100)}")
+            
+            return finalSimilarity
+        } finally {
+            tempBitmap1?.recycle()
+            tempBitmap2?.recycle()
+        }
+    }
+    
+    /**
+     * 判断两个位图是否相似
+     * @param bitmap1 第一个位图
+     * @param bitmap2 第二个位图
+     * @param threshold 相似度阈值（默认 0.9）
+     * @return true 如果两个位图相似
+     */
+    fun areSimilar(bitmap1: Bitmap, bitmap2: Bitmap, threshold: Double = 0.9): Boolean {
+        val similarity = calculateSimilarity(bitmap1, bitmap2, threshold)
+        val isSimilar = similarity >= threshold
+        
+        if (isSimilar) {
+            Log.d("BitmapUtils", "两个位图相似 (${String.format("%.2f%%", similarity * 100)})")
+        } else {
+            Log.d("BitmapUtils", "两个位图不相似 (${String.format("%.2f%%", similarity * 100)})")
+        }
+        
+        return isSimilar
+    }
+    
     fun isBitmapBlack(bitmap: Bitmap, threshold: Double = 0.98): Boolean {
         if (bitmap.width == 0 || bitmap.height == 0) {
             Log.w("BitmapUtils", "Bitmap 尺寸为 0")
@@ -83,4 +183,3 @@ object BitmapUtils {
         }
     }
 }
-
